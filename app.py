@@ -24,32 +24,44 @@ import re
 load_dotenv()
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 
+# Use /tmp for vectorstore (fast, survives container restart)
+VECTORSTORE_PATH = "/tmp/vector_index"
+UPLOAD_FOLDER = "/tmp/uploads"
+
+
+
 # ============================================================================
 # AGENTIC AI SETUP
 # ============================================================================
 
-text_splitter = CharacterTextSplitter(
-    separator='\n',
-    chunk_size=2000,
-    chunk_overlap=200,
-    length_function=len,
-)
+text_splitter = None
+
+def get_text_splitter():
+    global text_splitter
+    if text_splitter is None:
+        from langchain.text_splitter import CharacterTextSplitter
+        text_splitter = CharacterTextSplitter(
+            separator='\n',
+            chunk_size=2000,
+            chunk_overlap=200,
+            length_function=len,
+        )
+    return text_splitter
 
 # LAZY LOAD EMBEDDINGS - Only load when needed
 embeddings = None
 
 def get_embeddings():
-    """Lazy load embeddings to save memory on startup"""
+    """Lazy load embeddings using langchain_huggingface"""
     global embeddings
     if embeddings is None:
-        print("📦 Loading embeddings model (first time only)...")
-        from sentence_transformers import SentenceTransformer
-        # Use lightweight model: 22MB instead of 100MB+
-        embeddings = SentenceTransformer(
-            "sentence-transformers/all-MiniLM-L6-v2",
-            device="cpu"
+        print("Loading embeddings model (first time only)...")
+        from langchain_huggingface import HuggingFaceEmbeddings
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            model_kwargs={'device': 'cpu'}
         )
-        print("✅ Embeddings loaded")
+        print("Embeddings loaded")
     return embeddings
 
 # Initialize LLM with optimized settings
@@ -69,9 +81,12 @@ except Exception as e:
 
 # Flask app setup
 app = Flask(__name__)
-CORS(app)
-UPLOAD_FOLDER = 'uploads'
+# Create dirs
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(VECTORSTORE_PATH, exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+CORS(app)
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -574,8 +589,10 @@ def upload_file():
             current_resume_text = resume_text
             original_resume_text = resume_text  # Keep original
             
-            splitted_text = text_splitter.split_text(resume_text)
+            splitted_text = get_text_splitter().split_text(resume_text)
             vectorstore = FAISS.from_texts(splitted_text, get_embeddings())
+            vectorstore.save_local(VECTORSTORE_PATH)  # SAVE TO /tmp
+            print(f"Vectorstore saved to {VECTORSTORE_PATH}")
             # DON'T save to local - keep in memory only
             
             highlighted_suggestions = {}
@@ -626,9 +643,14 @@ def ask_query():
         if is_question and not is_improvement_request:
             print("Processing as Q&A query...")
             try:
-                if vectorstore is None:
-                    raise Exception("Vector store not initialized")
-                
+                if not os.path.exists(VECTORSTORE_PATH):
+                    return jsonify({'error': 'Please upload a resume first.'}), 400
+                from langchain_community.vectorstores import FAISS
+                vectorstore = FAISS.load_local(
+                    VECTORSTORE_PATH,
+                    get_embeddings(),
+                    allow_dangerous_deserialization=True
+                )
                 retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
                 docs = retriever.get_relevant_documents(query)
                 context = "\n\n".join([doc.page_content for doc in docs])
@@ -736,7 +758,7 @@ def apply_suggestion():
     })
     
     # Update vector store with new text (in memory only)
-    splitted_text = text_splitter.split_text(new_text)
+    splitted_text = get_text_splitter().split_text(new_text)
     vectorstore = FAISS.from_texts(splitted_text, get_embeddings())
     
     # Remove from highlighted suggestions
@@ -830,7 +852,7 @@ def reset_resume():
         highlighted_suggestions = {}
         
         # Update vector store
-        splitted_text = text_splitter.split_text(original_resume_text)
+        splitted_text = get_text_splitter().split_text(original_resume_text)
         vectorstore = FAISS.from_texts(splitted_text, get_embeddings())
         
         return jsonify({
@@ -853,7 +875,7 @@ def get_pending_edits():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"🚀 Starting server on port {port}...")
+    port = int(os.environ.get("PORT", 8080))  # 8080 local, $PORT on Render
+    print(f"Starting server on port {port}...")
     from waitress import serve
     serve(app, host="0.0.0.0", port=port, _quiet=True)
