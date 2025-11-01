@@ -21,6 +21,12 @@ import traceback
 from io import BytesIO
 import re
 
+import os
+print("=== ENVIRONMENT DEBUG ===")
+print("CEREBRAS_API_KEY:", os.getenv("CEREBRAS_API_KEY"))
+print("All env keys containing 'CEREB':", [k for k in os.environ.keys() if 'CEREB' in k])
+print("==========================")
+
 load_dotenv()
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 if not CEREBRAS_API_KEY:
