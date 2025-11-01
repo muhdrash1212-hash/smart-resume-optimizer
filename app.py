@@ -23,6 +23,9 @@ import re
 
 load_dotenv()
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
+if not CEREBRAS_API_KEY:
+    raise ValueError("CEREBRAS_API_KEY environment variable is not set!")
+
 
 # Use /tmp for vectorstore (fast, survives container restart)
 VECTORSTORE_PATH = "/tmp/vector_index"
@@ -69,7 +72,7 @@ llm = ChatCerebras(
     api_key=CEREBRAS_API_KEY,
     model="llama3.1-8b",
     temperature=0.3,
-    max_tokens=800  # Reduced from 2000 to save memory
+    max_tokens=1500  # Reduced from 2000 to save memory
 )
 
 print("🔍 Testing LLM connection...")
