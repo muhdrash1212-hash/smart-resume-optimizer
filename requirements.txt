@@ -18,3 +18,4 @@ tiktoken
 tokenizers
 transformers
 faiss-cpu
+waitress==3.0.0
